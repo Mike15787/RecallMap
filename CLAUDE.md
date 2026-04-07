@@ -30,6 +30,8 @@ recallmap/
 
 詳細指令（安裝、啟動、測試、lint）請參閱 **`COMMANDS.md`**。
 
+> **新 Session 必讀**：開始工作前請先查閱 Notion 的[專案實作進度追蹤](https://www.notion.so/33beb8f8720281708654cb10c240edb5)，確認目前完成了哪些功能、下一步優先做什麼。
+
 ---
 
 ## 跨平台架構
