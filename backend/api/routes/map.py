@@ -1,6 +1,6 @@
 """
-GET  /v1/sessions/{id}/map  — 取得學習地圖
-POST /v1/sessions/{id}/turns — 送出對話輪次
+GET  /v1/sessions/{id}/map   — 取得學習地圖（首次呼叫觸發盲點偵測）
+POST /v1/sessions/{id}/turns — 送出蘇格拉底對話輪次
 """
 import uuid
 from datetime import datetime, timezone
@@ -9,24 +9,24 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.engine import learning_map as lm_module
-from .session import get_session_store
+from backend.api.store import session_store
 
 router = APIRouter()
 
 
 @router.get("/{session_id}/map")
-async def get_learning_map(session_id: str):
-    """分析目前 session 的 chunks，產生學習地圖"""
-    sessions = get_session_store()
-    sess = sessions.get(session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{session_id}")
+async def get_learning_map(session_id: str, force: bool = False):
+    """
+    分析目前 session 的 chunks，產生學習地圖。
+    force=true 時強制重新分析（忽略快取）。
+    """
+    sess = await session_store.get_or_404(session_id)
 
     if not sess["chunks"]:
         raise HTTPException(status_code=422, detail="尚未上傳任何學習材料")
 
-    # 若已有地圖，直接回傳
-    if sess["learning_map"]:
+    # 若已有地圖且未強制刷新，直接回傳
+    if sess["learning_map"] and not force:
         return sess["learning_map"]
 
     # 偵測盲點 → 建學習地圖
@@ -38,6 +38,7 @@ async def get_learning_map(session_id: str):
     learning_map.add_blind_spots(spots)
     sess["learning_map"] = learning_map.to_dict()
 
+    await session_store.save(sess)
     return sess["learning_map"]
 
 
@@ -49,10 +50,7 @@ class TurnRequest(BaseModel):
 @router.post("/{session_id}/turns")
 async def post_turn(session_id: str, body: TurnRequest):
     """送出一輪蘇格拉底對話"""
-    sessions = get_session_store()
-    sess = sessions.get(session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{session_id}")
+    sess = await session_store.get_or_404(session_id)
 
     # 找到對應盲點
     spot = next((s for s in sess["blind_spots"] if s.blind_spot_id == body.blind_spot_id), None)
@@ -73,6 +71,7 @@ async def post_turn(session_id: str, body: TurnRequest):
         )
         dial_sess.turns.append(dlg.DialogueTurn(role="assistant", content=opening))
         sess["dialogue_sessions"][body.blind_spot_id] = dial_sess
+        await session_store.save(sess)
         return {"role": "assistant", "content": opening, "depth": None, "is_completed": False}
 
     # 後續輪次
@@ -98,6 +97,7 @@ async def post_turn(session_id: str, body: TurnRequest):
             lmap.update_node(body.blind_spot_id, depth, now)
             sess["learning_map"] = lmap.to_dict()
 
+    await session_store.save(sess)
     return {
         "role": "assistant",
         "content": ai_response,

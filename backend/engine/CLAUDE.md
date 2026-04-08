@@ -4,7 +4,7 @@ AI 核心層。接收 `DocumentChunk` 列表，執行盲點偵測、蘇格拉底
 
 每個模組頂部必須標註 RUNTIME，代表預設使用哪一層模型：
 ```python
-# RUNTIME: edge   → Gemma 4 E4B（Ollama 本地）
+# RUNTIME: edge   → Gemma 4 E4B（本地 inference server）
 # RUNTIME: cloud  → Gemma 4 26B（Vertex AI，目前為 stub）
 # RUNTIME: auto   → 由 gemma_client._decide_mode() 自動決定
 ```
@@ -13,15 +13,29 @@ AI 核心層。接收 `DocumentChunk` 列表，執行盲點偵測、蘇格拉底
 
 ### `gemma_client.py` — 統一 LLM 介面（RUNTIME: N/A）
 
-所有模組都必須透過此介面呼叫模型，禁止直接呼叫 Ollama 或 Vertex AI。
+所有模組都必須透過此介面呼叫模型，**禁止直接呼叫任何 inference server**。
 
 ```python
 await GemmaClient().generate(prompt, images=None, mode="auto", tools=None)
 ```
 
-自動路由規則：有 `tools` → cloud；有 `images` → edge；prompt > 2000 字元 → cloud；其餘 → edge。
+**自動路由規則**：有 `tools` → cloud；有 `images` → edge；prompt > 2000 字元 → cloud；其餘 → edge。
 
 Cloud 目前為 stub，呼叫會拋 `GemmaCloudError`。
+
+#### Edge Backend 切換（環境變數）
+
+透過 `EDGE_BACKEND` 選擇本地 inference server，程式碼不需要改動：
+
+| `EDGE_BACKEND` | 預設位址 | 說明 |
+|---------------|---------|------|
+| `ollama`（預設） | `OLLAMA_BASE_URL=http://localhost:11434` | Ollama `/api/generate` |
+| `llamacpp` | `LLAMACPP_BASE_URL=http://localhost:8080` | llama-server OpenAI-compatible |
+| `vllm` | `VLLM_BASE_URL=http://localhost:8000` | vLLM OpenAI-compatible |
+
+`llamacpp` 和 `vllm` 共用 `/v1/chat/completions`，視覺輸入也相容（OpenAI vision 格式）。
+
+模型名稱：`LLAMACPP_MODEL`（預設 `gemma-4`）、`VLLM_MODEL`（預設 `google/gemma-4-it`）。
 
 ### `blind_spot.py` — 盲點偵測（RUNTIME: auto）
 

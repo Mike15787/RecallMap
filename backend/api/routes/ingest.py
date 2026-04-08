@@ -1,14 +1,13 @@
 """
 POST /v1/sessions/{id}/ingest — 上傳學習材料
+POST /v1/sessions/{id}/ingest/notion — 從 Notion page 匯入
 """
 import json
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from backend.ingest import base as ingest_base
-from .session import get_session_store
+from backend.api.store import session_store
 
 router = APIRouter()
 
@@ -21,10 +20,7 @@ async def ingest_file(
     file: UploadFile = File(...),
     source_hint: str | None = Form(None),   # "chatgpt" | "gemini" | "notion" | None（自動偵測）
 ):
-    sessions = get_session_store()
-    sess = sessions.get(session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{session_id}")
+    sess = await session_store.get_or_404(session_id)
 
     filename = file.filename or "upload"
     ext = Path(filename).suffix.lower()
@@ -36,6 +32,7 @@ async def ingest_file(
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     sess["chunks"].extend(chunks)
+    await session_store.save(sess)
 
     return {
         "status": "ok",
@@ -48,21 +45,20 @@ async def ingest_file(
 @router.post("/{session_id}/ingest/notion")
 async def ingest_notion_page(session_id: str, page_id: str = Form(...)):
     """直接從 Notion page ID 匯入"""
-    sessions = get_session_store()
-    sess = sessions.get(session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{session_id}")
+    sess = await session_store.get_or_404(session_id)
 
     from backend.ingest import notion_parser
     chunks = await notion_parser.process(page_id)
     sess["chunks"].extend(chunks)
+    await session_store.save(sess)
 
     return {"status": "ok", "page_id": page_id, "chunks_added": len(chunks)}
 
 
 async def _dispatch(content: bytes, filename: str, ext: str, source_hint: str | None):
     """根據檔案類型分派到對應 parser"""
-    import tempfile, os
+    import tempfile
+    import os
 
     # JSON 檔案 → ChatGPT 或 Gemini export
     if ext == ".json" or source_hint in ("chatgpt", "gemini"):

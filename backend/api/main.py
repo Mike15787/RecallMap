@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 初始化 SQLite
+    from backend.api.store import session_store
+    await session_store.init()
+    logger.info(f"✅ SQLite 已就緒：{session_store._db_path}")
+
     # 啟動時檢查 Ollama 狀態
     from backend.engine.gemma_client import GemmaClient
     client = GemmaClient()

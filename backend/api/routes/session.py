@@ -1,16 +1,16 @@
 """
 POST /v1/sessions — 建立新的學習 session
+GET  /v1/sessions/{id} — 查詢 session 資訊
 """
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
-router = APIRouter()
+from backend.api.store import session_store
 
-# 簡易記憶體 store（之後可換成 Redis 或 SQLite）
-_sessions: dict[str, dict] = {}
+router = APIRouter()
 
 
 class CreateSessionRequest(BaseModel):
@@ -30,18 +30,12 @@ class SessionResponse(BaseModel):
 async def create_session(body: CreateSessionRequest):
     session_id = f"sess-{uuid.uuid4().hex[:12]}"
     now = datetime.now(tz=timezone.utc).isoformat()
-    _sessions[session_id] = {
-        "session_id": session_id,
-        "created_at": now,
-        "subject": body.subject,
-        "exam_date": body.exam_date,
-        "status": "active",
-        "chunks": [],
-        "blind_spots": [],
-        "learning_map": None,
-        "dialogue_sessions": {},
-        "calendar_credentials": None,
-    }
+    await session_store.create(
+        session_id=session_id,
+        created_at=now,
+        subject=body.subject,
+        exam_date=body.exam_date,
+    )
     return SessionResponse(
         session_id=session_id,
         created_at=now,
@@ -53,7 +47,7 @@ async def create_session(body: CreateSessionRequest):
 
 @router.get("/{session_id}")
 async def get_session(session_id: str):
-    sess = _get_or_404(session_id)
+    sess = await session_store.get_or_404(session_id)
     return {
         "session_id": sess["session_id"],
         "created_at": sess["created_at"],
@@ -63,14 +57,3 @@ async def get_session(session_id: str):
         "chunk_count": len(sess["chunks"]),
         "blind_spot_count": len(sess["blind_spots"]),
     }
-
-
-def _get_or_404(session_id: str) -> dict:
-    sess = _sessions.get(session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{session_id}")
-    return sess
-
-
-def get_session_store() -> dict[str, dict]:
-    return _sessions

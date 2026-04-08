@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .session import get_session_store
+from backend.api.store import session_store
 
 router = APIRouter()
 
@@ -18,10 +18,7 @@ class ScheduleRequest(BaseModel):
 
 @router.post("")
 async def create_schedule(body: ScheduleRequest):
-    sessions = get_session_store()
-    sess = sessions.get(body.session_id)
-    if not sess:
-        raise HTTPException(status_code=404, detail=f"Session 不存在：{body.session_id}")
+    sess = await session_store.get_or_404(body.session_id)
 
     if not sess["blind_spots"]:
         raise HTTPException(status_code=422, detail="尚未偵測到盲點，請先取得學習地圖")
@@ -43,7 +40,7 @@ async def create_schedule(body: ScheduleRequest):
     from backend.engine.scheduler import build_review_schedule
     from backend.integrations.calendar_api import get_free_slots, create_review_event
 
-    # 取得行程空檔（未來 14 天）
+    # 取得行程空檔
     today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
     end_day = (exam_date or datetime.now(tz=timezone.utc)).strftime("%Y-%m-%d")
     try:
