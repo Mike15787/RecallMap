@@ -1,6 +1,7 @@
 """
-POST /v1/sessions/{id}/ingest — 上傳學習材料
-POST /v1/sessions/{id}/ingest/notion — 從 Notion page 匯入
+POST /v1/sessions/{id}/ingest              — 上傳學習材料（檔案）
+POST /v1/sessions/{id}/ingest/notion       — 從 Notion page 匯入
+POST /v1/sessions/{id}/ingest/chatgpt-share — 從 ChatGPT 分享連結匯入
 """
 import json
 from pathlib import Path
@@ -75,15 +76,37 @@ async def _dispatch(content: bytes, filename: str, ext: str, source_hint: str | 
         from backend.ingest import image_parser
         return await image_parser.process_bytes(content, filename)
 
-    # 文件 → PDF / PPT / Word（需要寫到暫存檔）
+    # 文件 → PDF / PPT / Word（markitdown，需要寫到暫存檔）
     if ext in (".pdf", ".ppt", ".pptx", ".doc", ".docx"):
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            from backend.ingest import pdf_parser
-            return await pdf_parser.process(tmp_path)
+            from backend.ingest import document_parser
+            return await document_parser.process(tmp_path)
         finally:
             os.unlink(tmp_path)
 
     raise ValueError(f"不支援的檔案類型：{ext}")
+
+
+@router.post("/{session_id}/ingest/chatgpt-share")
+async def ingest_chatgpt_share(session_id: str, share_url: str = Form(...)):
+    """從 ChatGPT 分享連結（https://chatgpt.com/share/...）匯入對話"""
+    sess = await session_store.get_or_404(session_id)
+
+    from backend.ingest import chatgpt_share_parser
+    try:
+        chunks = await chatgpt_share_parser.process(share_url)
+    except (ValueError, ImportError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    sess["chunks"].extend(chunks)
+    await session_store.save(sess)
+
+    return {
+        "status": "ok",
+        "share_url": share_url,
+        "chunks_added": len(chunks),
+        "total_chunks": len(sess["chunks"]),
+    }

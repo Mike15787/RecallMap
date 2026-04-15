@@ -6,7 +6,7 @@ include = ["backend*"]
 name = "recallmap-backend"
 version = "0.1.0"
 description = "RecallMap backend — Privacy-First Learning AI Agent"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -15,10 +15,9 @@ dependencies = [
     "pydantic-settings>=2.3.0",
     "python-multipart>=0.0.9",
     # ingest
-    "pymupdf>=1.24.0",          # PDF 解析
-    "python-pptx>=0.6.23",      # PPT 解析
-    "python-docx>=1.1.0",       # Word 解析
-    "pillow>=10.3.0",           # 圖片處理
+    "markitdown[all]>=0.1.0",   # PDF / PPTX / DOCX 統一解析（Microsoft 開源）
+    "pillow>=10.3.0",           # 圖片處理（image_parser）
+    "playwright>=1.44.0",       # ChatGPT 分享連結爬取（chatgpt_share_parser）
     # persistence
     "aiosqlite>=0.20.0",
     # integrations

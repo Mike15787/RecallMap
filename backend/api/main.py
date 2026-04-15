@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routes import ingest, session, schedule, map as map_router, auth
+from .routes import ingest, session, schedule, map as map_router, auth, topics, quiz
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 初始化 SQLite
+    # 初始化 Session Store（SQLite）
     from backend.api.store import session_store
     await session_store.init()
-    logger.info(f"✅ SQLite 已就緒：{session_store._db_path}")
+    logger.info(f"✅ SQLite Session Store 已就緒：{session_store._db_path}")
+
+    # 初始化知識庫資料表
+    from backend.db.connection import init_db
+    await init_db()
+    logger.info("✅ 知識庫資料表已就緒")
 
     # 啟動時檢查 Ollama 狀態
     from backend.engine.gemma_client import GemmaClient
@@ -55,6 +60,8 @@ app.include_router(ingest.router,   prefix="/v1/sessions",    tags=["ingest"])
 app.include_router(map_router.router, prefix="/v1/sessions",  tags=["map"])
 app.include_router(schedule.router, prefix="/v1/schedules",   tags=["schedules"])
 app.include_router(auth.router,     prefix="/v1/auth",        tags=["auth"])
+app.include_router(topics.router,   prefix="/v1/topics",      tags=["topics"])
+app.include_router(quiz.router,     prefix="/v1/topics",      tags=["quiz"])
 
 
 @app.get("/health")
