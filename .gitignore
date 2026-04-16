@@ -19,6 +19,9 @@ node_modules/
 frontend/dist/
 frontend/.svelte-kit/
 
+# Expo
+.expo/
+
 # IDE
 .vscode/settings.json
 .idea/
