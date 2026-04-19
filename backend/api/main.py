@@ -26,14 +26,21 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("✅ 知識庫資料表已就緒")
 
-    # 啟動時檢查 Ollama 狀態
+    # 啟動時檢查 LLM backend（非致命，失敗只印警告）
     from backend.engine.gemma_client import GemmaClient
-    client = GemmaClient()
-    health = await client.health_check()
-    if health["edge"]["available"]:
-        logger.info(f"✅ Ollama edge model ready: {health['edge']['model']}")
-    else:
-        logger.warning(f"⚠️  Ollama edge model NOT available — 請執行: ollama pull {health['edge']['model']}")
+    try:
+        client = GemmaClient()
+        health = await client.health_check()
+        edge = health["edge"]
+        if edge.get("available"):
+            logger.info(f"[OK] LLM backend ready: {edge.get('backend')} / {edge.get('model')} @ {edge.get('url')}")
+        else:
+            logger.warning(
+                f"[WARN] LLM backend NOT reachable: {edge.get('backend')} @ {edge.get('url')} — "
+                f"請確認 server 已啟動、model {edge.get('model')} 已載入"
+            )
+    except Exception as e:
+        logger.warning(f"[WARN] LLM health check 失敗（不中止啟動）：{e}")
     yield
 
 
@@ -45,7 +52,10 @@ app = FastAPI(
 )
 
 # CORS
-cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
+cors_origins = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:1420",
+).split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
