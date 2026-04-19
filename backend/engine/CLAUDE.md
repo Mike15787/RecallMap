@@ -1,74 +1,89 @@
 # backend/engine/CLAUDE.md
 
-AI 核心層。接收 `DocumentChunk` 列表，執行盲點偵測、蘇格拉底對話、間隔複習排程，並維護學習地圖狀態。
+AI 核心層。接收 `DocumentChunk` 列表，執行 concept 抽取、雙軸分數管理、quiz 生成與評分、SM-2 排程，並維護兩張學習地圖。
 
-每個模組頂部必須標註 RUNTIME，代表預設使用哪一層模型：
-```python
-# RUNTIME: edge   → Gemma 4 E4B（本地 inference server）
-# RUNTIME: cloud  → Gemma 4 26B（Vertex AI，目前為 stub）
-# RUNTIME: auto   → 由 gemma_client._decide_mode() 自動決定
-```
+**所有模組都是本機執行**（llama-cpp-python）。2026-04-19 架構重訂後已完全移除 cloud 分支，`RUNTIME` 註解可簡化或省略。
 
 ## 模組說明
 
-### `gemma_client.py` — 統一 LLM 介面（RUNTIME: N/A）
+### `gemma_client.py` — 統一 LLM 介面
 
-所有模組都必須透過此介面呼叫模型，**禁止直接呼叫任何 inference server**。
+所有模組都必須透過此介面呼叫模型，**禁止直接 import llama_cpp**。
 
 ```python
-await GemmaClient().generate(prompt, images=None, mode="auto", tools=None)
+client = GemmaClient()
+await client.generate(prompt, images=None, tools=None)  # 文字（含 vision）
+await client.embed(text)                                 # 向量（寫 sqlite-vec）
+await client.classify(prompt, choices)                   # 結構化分類
 ```
 
-**自動路由規則**：有 `tools` → cloud；有 `images` → edge；prompt > 2000 字元 → cloud；其餘 → edge。
+底層使用 `llama-cpp-python`，模型載入由環境變數 `LLAMACPP_MODEL_PATH` 指定。
 
-Cloud 目前為 stub，呼叫會拋 `GemmaCloudError`。
+> **正在遷移**：現有實作仍透過 HTTP 呼叫 Ollama/llama-server/vLLM。改為直接載入 llama-cpp-python 是進行中的工作。
 
-#### Edge Backend 切換（環境變數）
+### `blind_spot.py` — 對話訊號分析器
 
-透過 `EDGE_BACKEND` 選擇本地 inference server，程式碼不需要改動：
+**已重新定位**（2026-04-19）：從「獨立盲點偵測」改為「對話訊號分析器」，輸出給 `comprehension_engine` 作為初始分數依據。
 
-| `EDGE_BACKEND` | 預設位址 | 說明 |
-|---------------|---------|------|
-| `ollama`（預設） | `OLLAMA_BASE_URL=http://localhost:11434` | Ollama `/api/generate` |
-| `llamacpp` | `LLAMACPP_BASE_URL=http://localhost:8080` | llama-server OpenAI-compatible |
-| `vllm` | `VLLM_BASE_URL=http://localhost:8000` | vLLM OpenAI-compatible |
+輸入：`ChunkList`（含 `is_conversation` 標記的 chunks）
+輸出：每個 concept 的「重複提問次數」「疑惑訊號強度」等訊號，交給下游。
 
-`llamacpp` 和 `vllm` 共用 `/v1/chat/completions`，視覺輸入也相容（OpenAI vision 格式）。
+### `learning_map.py` — 兩張學習地圖
 
-模型名稱：`LLAMACPP_MODEL`（預設 `gemma-4`）、`VLLM_MODEL`（預設 `google/gemma-4-it`）。
+**已重新定位**（2026-04-19）：從四色單圖改為**兩張獨立地圖**（理解 / 記憶），Tab 切換。
 
-### `blind_spot.py` — 盲點偵測（RUNTIME: auto）
+- 節點 = concept
+- 邊 = 兩 concept 的 embedding cosine > 0.75（用 sqlite-vec 查）
+- 理解地圖顏色：依 `comprehension_score`（🔴 < 0.4 / 🟡 0.4–0.7 / 🟢 ≥ 0.7）
+- 記憶地圖顏色：依 `next_review_due` 與今日距離（🟠 過期 / 🟢 未到期 / ⚪ 未進入 SM-2）
 
-輸入：`ChunkList`（含 `is_conversation` 標記的 chunks）  
-輸出：`list[BlindSpot]`
+### `comprehension_engine.py` — 理解軸引擎
 
-流程：chunks 分為筆記 / 對話兩區塊 → 組成 prompt → 呼叫 Gemma → 解析 JSON 回應。
-模型回傳 3–7 個盲點，每個含 `concept`、`confidence`（0–1）、`evidence`、`repeat_count`。
+- 輸入 quiz 回答 → Gemma 判 `no_understanding / partial / solid / deep`
+- 更新 `comprehension_score` + `comprehension_level`
+- `solid` 以上且非同 session → 觸發 retention_engine 寫入 SM-2 排程
 
-### `learning_map.py` — 學習地圖（RUNTIME: edge，純邏輯不呼叫模型）
+### `retention_engine.py` — 記憶軸（SM-2）
 
-維護 `LearningMap`（含 `MapNode` 列表）。`ZoneType` 依 confidence 分區：
-- ≥ 0.75 → `KNOWN`（已知區）
-- ≥ 0.45 → `FUZZY`（模糊區）
-- < 0.45 → `BLIND`（盲點區）
+- 完整 SM-2：interval + easiness + repetitions
+- **準入條件**：對應 concept 的 `comprehension_level` 需達 `solid`
+- 失敗（response_quality < 2）時 `comprehension_score *= 0.95`（輕微連動衰減）
 
-`add_blind_spots()` 把 `BlindSpot` 轉成 `MapNode` 並回填 `blind_spot_id`。
-`update_node()` 在蘇格拉底對話結束後更新理解程度。
+### `quiz_engine.py` — 四題型生成與評分
 
-### `dialogue.py` — 蘇格拉底對話（RUNTIME: auto）
+- 簡答 / 選擇 / 是非 / 填空
+- 策略：`comprehension < 0.4` 先選擇/填空；`0.4–0.7` 簡答為主；`> 0.7` 換情境應用題
+- Interleaving：記憶型 session 內 3–5 個 concept 交錯
+- 評分：簡答+填空 → Gemma 判；選擇+是非 → 硬比對 + Gemma 補解釋
 
-蘇格拉底式追問流程，不直接給答案，引導學生自己思考。
+### `session_trigger.py` — Quiz session 觸發器
 
-- `start_dialogue(concept, background)` → 回傳第一個問題
-- `continue_dialogue(concept, history, user_answer)` → 回傳 `(下一個問題, 理解深度 0–1)`
+依優先順序組裝 session：盲點修復 > 到期記憶複習 > 理解深化。
+單次 session 上限 10–15 個 concept。
 
-當理解深度 ≥ 0.8 時自動結束對話。每次評估深度用 edge 模型（短 prompt），追問用 auto。
+### `knowledge_base.py` — 持久化層
 
-### `scheduler.py` — SM-2 間隔複習排程（RUNTIME: edge，純演算法）
+封裝 SQLite（+ sqlite-vec）CRUD。含 capsule、concept、concept_chunks、tag、mastery_records、embedding 等表的操作。
 
-實作 SM-2 演算法（`SM2Card`）。`build_review_schedule()` 根據盲點列表和考試日期產生 `ReviewEvent` 列表。
+### `scheduler.py` — SM-2 排程整合
 
-- 按 confidence 排序（信心越低越早複習）
-- 最多排到考試日或 30 天後
-- 若有 `free_slots`（Google Calendar 空檔），會嘗試對齊；否則直接用建議時間
-- 目前每個盲點最多排兩輪（第一輪立即，第二輪按 SM-2 間隔）
+配合 `retention_engine` 產出的 `next_review_due`，產生 Google Calendar events 或 .ics 匯出。
+
+### `tag_generator.py`（規劃中）
+
+取代原 `topic_classifier.py`。從 chunk 內容抽出關鍵詞 tag（如「遞迴」「Java」「OO」），供搜尋/過濾/顯示出處。**不決定圖的邊**（邊靠 embedding）。
+
+### `concept_extractor.py`（規劃中）
+
+兩階段 concept 抽取：
+1. **ingest 時粗抽**：快速關鍵詞提取
+2. **quiz 前精算**：用戶從清單勾選「要學的」後，再用完整 prompt 精化
+
+### 已廢棄 / 標記為 P2
+
+| 模組 | 狀態 |
+|---|---|
+| `dialogue.py` | **已廢棄**（2026-04-09）。改自適應 quiz 取代蘇格拉底對話。請勿呼叫、勿擴展。 |
+| `delayed_confirmation.py` | **P2**，demo 不做。保留檔案但不接入主流程。 |
+| `intent_layer.py` | **P2**（Active/Snoozed/Archived），demo 不做。 |
+| `topic_classifier.py` | **重構中**：原「主題分類」廢棄，將改寫為 `tag_generator.py`。 |

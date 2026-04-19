@@ -1,26 +1,44 @@
 # apps/CLAUDE.md
 
-前端應用層。包含兩個 app，共用 `packages/shared` 的型別與 API client。
+前端應用層。**2026-04-19 架構重訂後只有桌面單一 app**。
 
 ## 子目錄
 
-| 目錄 | 技術 | 負責平台 |
-|------|------|---------|
-| `mobile/` | Expo (React Native) | iOS + Android + Web（三合一） |
-| `desktop/` | Tauri | Windows + macOS |
+| 目錄 | 技術 | 說明 |
+|------|------|------|
+| `desktop/` | Tauri + React + Vite + shadcn/ui + Tailwind | 唯一前端 |
 
-## 平台關係
+## 已刪除
 
+- `apps/mobile/`（Expo React Native → iOS/Android/Web 多平台方案）
+- 根目錄 `packages/shared/`（跨平台共用型別）
+- 根目錄 `frontend/`（舊殘留目錄）
+
+桌面 app **自行在 `apps/desktop/src/types/` 定義 TypeScript 型別**，與後端 Pydantic schema 對齊（人工維護或用 openapi-typescript 自動產生）。
+
+## 平台目標
+
+- Windows（MSI）
+- macOS（DMG）
+
+## 技術細節
+
+- **Tauri 殼層**：Rust 寫的殼，負責打開視窗、檔案存取、啟動後端 sidecar
+- **React + Vite**：UI 主體
+- **shadcn/ui + Tailwind**：設計系統
+- **react-flow**：力導向圖（兩張學習地圖）
+- **FastAPI 後端**以 HTTP 方式溝通（localhost:8000），**不是** Tauri sidecar（至少目前不是）
+
+## 開發
+
+```bash
+cd apps/desktop
+npm install
+npm run tauri dev
 ```
-apps/mobile   ─── web build ───→  apps/desktop (Tauri 包裝)
-     │
-     └── 共同 import ──→  packages/shared (型別 + API client)
-```
 
-桌面版不是獨立前端，它是把 mobile 的 web build 打包成原生應用。開發時只需維護 `mobile/`，`desktop/` 只處理 Tauri 殼層與本地系統整合（Ollama 啟動、檔案存取）。
+---
 
-## 開發優先順序
+## Onboarding 策略
 
-1. `mobile/`（web 模式）— 主力開發目標
-2. `mobile/`（RN 模式）— 調整 iOS/Android 元件
-3. `desktop/`（Tauri 包裝）— 最後整合
+**不做**。第一次開 app 直接看到拖曳區 + 「拖 PDF 進來開始」的文案。這是 2026-04-19 的明確決定。
